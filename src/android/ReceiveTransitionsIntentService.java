@@ -42,8 +42,8 @@ public class ReceiveTransitionsIntentService extends IntentService {
         logger.log(Log.DEBUG, "ReceiveTransitionsIntentService - onHandleIntent");
         Intent broadcastIntent = new Intent(GeofenceTransitionIntent);
         notifier = new GeoNotificationNotifier(
-            (NotificationManager) this.getSystemService(Context.NOTIFICATION_SERVICE),
-            this
+                (NotificationManager) this.getSystemService(Context.NOTIFICATION_SERVICE),
+                this
         );
 
         // TODO: refactor this, too long
@@ -62,6 +62,9 @@ public class ReceiveTransitionsIntentService extends IntentService {
             if ((transitionType == Geofence.GEOFENCE_TRANSITION_ENTER)
                     || (transitionType == Geofence.GEOFENCE_TRANSITION_EXIT)) {
                 logger.log(Log.DEBUG, "Geofence transition detected");
+
+                boolean startActivity = false;
+
                 List<Geofence> triggerList = geofencingEvent.getTriggeringGeofences();
                 List<GeoNotification> geoNotifications = new ArrayList<GeoNotification>();
                 for (Geofence fence : triggerList) {
@@ -75,12 +78,23 @@ public class ReceiveTransitionsIntentService extends IntentService {
                         }
                         geoNotification.transitionType = transitionType;
                         geoNotifications.add(geoNotification);
+
+                        if (geoNotification.openAppOnTransition) {
+                            startActivity = true;
+                        }
                     }
                 }
 
                 if (geoNotifications.size() > 0) {
-                    broadcastIntent.putExtra("transitionData", Gson.get().toJson(geoNotifications));
-                    GeofencePlugin.onTransitionReceived(geoNotifications);
+                    if (startActivity) {
+                        String packageName = this.getPackageName();
+                        Intent resultIntent = this.getPackageManager().getLaunchIntentForPackage(packageName);
+                        resultIntent.putExtra(GeofencePlugin.KEY_INTENT_GEOFENCE, Gson.get().toJson(geoNotifications));
+                        this.startActivity(resultIntent);
+                    } else {
+                        broadcastIntent.putExtra("transitionData", Gson.get().toJson(geoNotifications));
+                        GeofencePlugin.onTransitionReceived(geoNotifications);
+                    }
                 }
             } else {
                 String error = "Geofence transition error: " + transitionType;

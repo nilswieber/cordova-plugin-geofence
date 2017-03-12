@@ -25,6 +25,9 @@ public class GeofencePlugin extends CordovaPlugin {
     private Context context;
     public static CordovaWebView webView = null;
 
+
+    public static final String KEY_INTENT_GEOFENCE = "geofence.transition.data";
+
     private class Action {
         public String action;
         public JSONArray args;
@@ -40,6 +43,10 @@ public class GeofencePlugin extends CordovaPlugin {
     //FIXME: what about many executedActions at once
     private Action executedAction;
 
+    private static String pendingGeofence;
+    private boolean isReady = false;
+    private boolean isInitialized = false;
+    private boolean actionInitialize = false;
     /**
      * @param cordova
      *            The context of the main Activity.
@@ -47,12 +54,27 @@ public class GeofencePlugin extends CordovaPlugin {
      *            The associated CordovaWebView.
      */
     @Override
-    public void initialize(CordovaInterface cordova, CordovaWebView webView) {
+    public synchronized void initialize(CordovaInterface cordova, CordovaWebView webView) {
         super.initialize(cordova, webView);
         GeofencePlugin.webView = webView;
         context = this.cordova.getActivity().getApplicationContext();
         Logger.setLogger(new Logger(TAG, context, false));
         geoNotificationManager = new GeoNotificationManager(context);
+
+        isInitialized = true;
+        checkPendingGeofenceData();
+    }
+
+    /**
+     * Called when the activity receives a new intent.
+     *
+     * @param intent
+     */
+    @Override
+    public void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+
+        checkIntentForGeofenceData(intent);
     }
 
     @Override
@@ -92,8 +114,25 @@ public class GeofencePlugin extends CordovaPlugin {
         return true;
     }
 
+    /**
+     * The final call you receive before your activity is destroyed.
+     */
+    @Override
+    public synchronized void onDestroy() {
+        this.isReady = false;
+        this.isInitialized = false;
+        this.actionInitialize = false;
+    }
+
     public boolean execute(Action action) throws JSONException {
         return execute(action.action, action.args, action.callbackContext);
+    }
+
+    private synchronized void checkPendingGeofenceData() {
+        if (pendingGeofence != null && actionInitialize && isInitialized && isReady) {
+            sendTransition(pendingGeofence);
+            pendingGeofence = null;
+        }
     }
 
     private GeoNotification parseFromJSONObject(JSONObject object) {
@@ -102,17 +141,22 @@ public class GeofencePlugin extends CordovaPlugin {
     }
 
     public static void onTransitionReceived(List<GeoNotification> notifications) {
-        Log.d(TAG, "Transition Event Received!");
-        String js = "setTimeout('geofence.onTransitionReceived("
-            + Gson.get().toJson(notifications) + ")',0)";
-        if (webView == null) {
-            Log.d(TAG, "Webview is null");
-        } else {
-            webView.sendJavascript(js);
-        }
+        Log.d(TAG, "(onTransitionReceived) Transition Event Received!");
+        String geofenceData = Gson.get().toJson(notifications);
+        sendTransition(geofenceData);
     }
 
-    private void deviceReady() {
+    private static void sendTransition(String data) {
+        Log.d(TAG, "Transition Event Received!");
+        String js = "setTimeout('geofence.onTransitionReceived("
+                + data + ")',0)";
+        webView.sendJavascript(js);
+        Log.d(TAG, "Sent GeofenceTransition to JS");
+    }
+
+    private synchronized void deviceReady() {
+        isReady=true;
+
         Intent intent = cordova.getActivity().getIntent();
         String data = intent.getStringExtra("geofence.notification.data");
         String js = "setTimeout('geofence.onNotificationClicked(" + data + ")',0)";
@@ -122,12 +166,25 @@ public class GeofencePlugin extends CordovaPlugin {
         } else {
             webView.sendJavascript(js);
         }
+
+        checkIntentForGeofenceData(intent);
     }
 
-    private void initialize(CallbackContext callbackContext) throws JSONException {
+    private void checkIntentForGeofenceData(Intent intent){
+        String dataGeofence = intent.getStringExtra(KEY_INTENT_GEOFENCE);
+        if (dataGeofence == null) {
+            Log.d(TAG, "No Geofence Transistions.");
+        } else {
+            Log.d(TAG,"Got Geofence Transition:"+dataGeofence);
+            pendingGeofence = dataGeofence;
+            checkPendingGeofenceData();
+        }
+    }
+
+    private synchronized void initialize(CallbackContext callbackContext) throws JSONException {
         String[] permissions = {
-            Manifest.permission.ACCESS_COARSE_LOCATION,
-            Manifest.permission.ACCESS_FINE_LOCATION
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+                Manifest.permission.ACCESS_FINE_LOCATION
         };
 
         if (!hasPermissions(permissions)) {
@@ -135,6 +192,9 @@ public class GeofencePlugin extends CordovaPlugin {
         } else {
             callbackContext.success();
         }
+
+        actionInitialize=true;
+        checkPendingGeofenceData();
     }
 
     private boolean hasPermissions(String[] permissions) {
